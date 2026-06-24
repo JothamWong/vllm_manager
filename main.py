@@ -66,6 +66,11 @@ async def startup_event():
     start_vllm()
     asyncio.create_task(idle_monitor_loop())
 
+@app.on_event("shutdown")
+async def shutdown_event():
+    global vllm_process
+    vllm_process.kill()
+
 async def idle_monitor_loop():
     global last_activity_time
     while True:
