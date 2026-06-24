@@ -18,6 +18,7 @@ PROXY_PORT = int(os.getenv("PROXY_PORT", 42016))
 VLLM_PORT = int(os.getenv("VLLM_PORT", 42017))
 IDLE_TIMEOUT = int(os.getenv("IDLE_TIMEOUT", 600))
 MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
+GPU_MEMORY_UTIL = os.getenv("GPU_MEMORY_UTIL", "0.90")
 
 app = FastAPI()
 vllm_process = None
@@ -27,23 +28,25 @@ client = httpx.AsyncClient(base_url=f"http://0.0.0.0:{VLLM_PORT}", timeout=None)
 
 def start_vllm():
     global vllm_process
+    env = os.environ.copy()
+    env["CUDA_VISIBLE_DEVICES"] = "1"
     cmd = [
         "vllm", "serve", MODEL_NAME,
         "--host", "127.0.0.1",
         "--port", str(VLLM_PORT),
-        "--tensor-parallel-size", "2",
-        "--gpu-memory-utilization", "0.90",
+        "--tensor-parallel-size", "1",
+        "--gpu-memory-utilization", GPU_MEMORY_UTIL,
         "--enable-sleep-mode"
     ]
     print(f"Starting vLLM on port {VLLM_PORT}...")
-    vllm_process = subprocess.Popen(cmd)
+    vllm_process = subprocess.Popen(cmd, env=env)
 
 async def wake_vllm():
     global is_sleeping
     if is_sleeping:
         print("Waking")
         try:
-            await client.post("/v1/wake")
+            await client.post("/wake_up")
             is_sleeping = False
         except Exception as e:
             print(f"[Manager] Error attempting to wake vLLM: {e}")
@@ -53,7 +56,7 @@ async def sleep_vllm():
     if not is_sleeping:
         print("Sleep...")
         try:
-            await client.post("/v1/sleep")
+            await client.post("/sleep?level=1")
             is_sleeping = True
         except Exception as e:
             print(f"[Manager] Error attempting to sleep vLLM: {e}")
