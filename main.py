@@ -2,7 +2,7 @@ import asyncio
 import subprocess
 import time
 import httpx
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Request, Response, HTTPException
 import uvicorn
 from dotenv import load_dotenv
 import os
@@ -26,6 +26,7 @@ last_activity_time = time.time()
 is_sleeping = False
 client = httpx.AsyncClient(base_url=f"http://0.0.0.0:{VLLM_PORT}", timeout=None)
 
+
 def start_vllm():
     global vllm_process
     env = os.environ.copy()
@@ -41,6 +42,7 @@ def start_vllm():
     print(f"Starting vLLM on port {VLLM_PORT}...")
     vllm_process = subprocess.Popen(cmd, env=env)
 
+
 async def wake_vllm():
     global is_sleeping
     if is_sleeping:
@@ -50,6 +52,7 @@ async def wake_vllm():
             is_sleeping = False
         except Exception as e:
             print(f"[Manager] Error attempting to wake vLLM: {e}")
+
 
 async def sleep_vllm():
     global is_sleeping
@@ -61,15 +64,18 @@ async def sleep_vllm():
         except Exception as e:
             print(f"[Manager] Error attempting to sleep vLLM: {e}")
 
+
 @app.on_event("startup")
 async def startup_event():
     start_vllm()
     asyncio.create_task(idle_monitor_loop())
 
+
 @app.on_event("shutdown")
 async def shutdown_event():
     global vllm_process
     vllm_process.kill()
+
 
 async def idle_monitor_loop():
     global last_activity_time
@@ -78,16 +84,46 @@ async def idle_monitor_loop():
         if time.time() - last_activity_time > IDLE_TIMEOUT:
             await sleep_vllm()
 
+
+@app.get("/status")
+async def status():
+    """Call nvidia-smi on the machine and return the output in a CSV friendly manner"""
+    try:
+        result = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=name,memory.used,memory.total,utilization.gpu,temperature.gpu",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        gpus = []
+        for line in result.stdout.strip().splitlines():
+            name, mem_used, mem_total, util, temp = [x.strip() for x in line.split(",")]
+            gpus.append({
+                "name": name,
+                "memory_used": int(mem_used),
+                "memory_total": int(mem_total),
+                "utilization": int(util),
+                "temperature": int(temp),   
+            })
+        return {"gpus": gpus}
+    except subprocess.CalledProcessError as e:
+        raise HTTPException(status_code=500, detail=e.stderr)
+
+
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
 async def proxy_catch_all(request: Request, path: str):
     global last_activity_time
-    
+
     last_activity_time = time.time()
     await wake_vllm()
 
     url = f"/{path}"
     headers = dict(request.headers)
-    headers.pop("host", None) 
+    headers.pop("host", None)
     content = await request.body()
 
     try:
@@ -96,17 +132,20 @@ async def proxy_catch_all(request: Request, path: str):
             url=url,
             headers=headers,
             content=content,
-            params=request.query_params
+            params=request.query_params,
         )
         vllm_response = await client.send(req)
-        
+
         return Response(
             content=vllm_response.content,
             status_code=vllm_response.status_code,
-            headers=dict(vllm_response.headers)
+            headers=dict(vllm_response.headers),
         )
     except httpx.RequestError as exc:
-        return Response(content=f"Proxy error: vLLM backend unavailable ({exc})", status_code=503)
+        return Response(
+            content=f"Proxy error: vLLM backend unavailable ({exc})", status_code=503
+        )
+
 
 if __name__ == "__main__":
     uvicorn.run(app, host=PROXY_HOST, port=PROXY_PORT)
