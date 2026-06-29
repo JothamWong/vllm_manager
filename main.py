@@ -38,7 +38,10 @@ def start_vllm():
         "--port", str(VLLM_PORT),
         "--tensor-parallel-size", "1",
         "--gpu-memory-utilization", GPU_MEMORY_UTIL,
-        "--enable-sleep-mode"
+        "--enable-sleep-mode",
+        # Locally deployed qwen3 agent
+        "--enable-auto-tool-choice",
+        "--tool-call-parser", "qwen3_coder",
     ]
     print(f"Starting vLLM on port {VLLM_PORT}...")
     vllm_process = subprocess.Popen(cmd, env=env)
