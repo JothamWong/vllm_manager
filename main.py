@@ -33,6 +33,7 @@ def start_vllm():
     env["CUDA_VISIBLE_DEVICES"] = "1"
     cmd = [
         "vllm", "serve", MODEL_NAME,
+        "--served-model-name", "jotham",
         "--host", "127.0.0.1",
         "--port", str(VLLM_PORT),
         "--tensor-parallel-size", "1",
@@ -41,6 +42,23 @@ def start_vllm():
     ]
     print(f"Starting vLLM on port {VLLM_PORT}...")
     vllm_process = subprocess.Popen(cmd, env=env)
+    
+    
+async def wait_for_vllm_ready():
+    """
+    Start the idle loop only after the server is done loading the model
+    Readiness is defined as the vllm endpoint returning 200 for Status
+    """
+    poll_interval = 5
+    while True:
+        try:
+            response = await client.get("/health")
+            if response.status_code == 200:
+                print("Done loading")
+                return True
+        except (httpx.ConnectError, httpx.HTTPError):
+            pass
+        await asyncio.sleep(poll_interval)
 
 
 async def wake_vllm():
@@ -67,7 +85,10 @@ async def sleep_vllm():
 
 @app.on_event("startup")
 async def startup_event():
+    global last_activity_time
     start_vllm()
+    await wait_for_vllm_ready()
+    last_activity_time = time.time()
     asyncio.create_task(idle_monitor_loop())
 
 
